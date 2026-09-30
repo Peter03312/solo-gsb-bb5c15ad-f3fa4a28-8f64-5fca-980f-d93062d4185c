@@ -37,6 +37,7 @@ exports.router = void 0;
 const express_1 = require("express");
 const db_1 = require("./db");
 const collation_1 = require("./collation");
+const diff_1 = require("./diff");
 const validate_1 = require("./validate");
 const util_1 = require("./util");
 const repo_1 = require("./repo");
@@ -338,4 +339,29 @@ exports.router.get('/documents/:id/editions/:no', wrap(async (req, res) => {
     if (rows.length === 0)
         throw new util_1.HttpError(404, `校勘版 #${no} 不存在（旧版永久保留可读）`);
     res.json({ editionNo: rows[0].edition_no, createdAt: rows[0].created_at, view: rows[0].snapshot });
+}));
+/**
+ * 已发布校勘版 vs 当前工作版的变更对照（只读）。
+ *  - 旧版不存在 → 404 明确报错；
+ *  - 每次请求实时构建工作版读模型，刷新即反映最新工作版；
+ *  - 不修改工作版与任何快照。
+ */
+exports.router.get('/documents/:id/editions/:no/diff', wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const no = Number(req.params.no);
+    if (!Number.isInteger(no) || no < 1)
+        throw new util_1.HttpError(400, '版本号必须是正整数');
+    const { query } = await Promise.resolve().then(() => __importStar(require('./db')));
+    const { rows } = await query('SELECT edition_no, snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2', [id, no]);
+    if (rows.length === 0) {
+        throw new util_1.HttpError(404, `校勘版 #${no} 不存在，无法与工作版对照（旧版永久保留可读）`);
+    }
+    const result = await (0, db_1.withTx)(async (c) => {
+        const current = await (0, collation_1.buildView)(c, await (0, repo_1.getDoc)(c, id));
+        return (0, diff_1.buildEditionDiff)(rows[0].snapshot, current, {
+            editionNo: rows[0].edition_no,
+            createdAt: rows[0].created_at,
+        });
+    });
+    res.json(result);
 }));

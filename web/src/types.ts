@@ -79,3 +79,119 @@ export interface EditionSummary {
   edition_no: number;
   created_at: string;
 }
+
+// ---- 版本对照（已发布校勘版 vs 当前工作版） ----
+
+export type DiffOp = 'eq' | 'ins' | 'del';
+
+export interface CharChange {
+  op: DiffOp;
+  text: string;
+}
+
+export type CellStatus = 'text' | 'missing' | 'absent' | 'broken';
+
+export interface CellChange {
+  msId: number;
+  msName: string;
+  oldStatus: CellStatus;
+  newStatus: CellStatus;
+  changed: boolean;
+  oldText?: string;
+  newText?: string;
+  oldLineNo?: number;
+  newLineNo?: number;
+  oldStartCp?: number;
+  oldEndCp?: number;
+  newStartCp?: number;
+  newEndCp?: number;
+  newOobEnd?: number;
+  charChanges: CharChange[] | null;
+}
+
+export interface PairedGroupChange {
+  kind: 'paired';
+  oldOrd: number;
+  newOrd: number;
+  ordChanged: boolean;
+  changed: boolean;
+  oldBroken: boolean;
+  newBroken: boolean;
+  oldBaseText: string;
+  newBaseText: string;
+  cells: CellChange[];
+}
+
+export interface UnpairedCell {
+  msId: number;
+  msName: string;
+  status: CellStatus;
+  text?: string;
+  lineNo?: number;
+  startCp?: number;
+  endCp?: number;
+  oobEnd?: number;
+}
+
+export type UnpairedReason = 'base-mismatch' | 'duplicate-key' | 'unmatched' | 'broken-base';
+
+export interface UnpairedGroupChange {
+  kind: 'unpaired';
+  side: 'old' | 'new';
+  ord: number;
+  groupId?: number;
+  broken: boolean;
+  reason: UnpairedReason;
+  baseText: string;
+  baseLineNo?: number;
+  baseStartCp?: number;
+  baseEndCp?: number;
+  cells: UnpairedCell[];
+}
+
+export interface LineChange {
+  msId: number;
+  msName: string;
+  lineNo: number;
+  kind: 'modified' | 'added' | 'removed';
+  changes: CharChange[];
+}
+
+export interface ManuscriptChange {
+  msId: number;
+  oldName: string | null;
+  newName: string | null;
+  kind: 'same' | 'added' | 'removed' | 'renamed';
+}
+
+export interface EditionDiff {
+  documentId: number;
+  title: string;
+  baseChanged: boolean;
+  oldSide: {
+    editionNo: number;
+    createdAt: string | null;
+    version: number;
+    baseMsId: number | null;
+    baseMsName: string | null;
+  };
+  newSide: {
+    version: number;
+    baseMsId: number | null;
+    baseMsName: string | null;
+  };
+  manuscripts: ManuscriptChange[];
+  lineChanges: LineChange[];
+  pairedGroups: PairedGroupChange[];
+  unpairedOldGroups: UnpairedGroupChange[];
+  unpairedNewGroups: UnpairedGroupChange[];
+  stats: {
+    pairedCount: number;
+    pairedChangedCount: number;
+    unpairedOldCount: number;
+    unpairedNewCount: number;
+    linesModified: number;
+    linesAdded: number;
+    linesRemoved: number;
+  };
+}

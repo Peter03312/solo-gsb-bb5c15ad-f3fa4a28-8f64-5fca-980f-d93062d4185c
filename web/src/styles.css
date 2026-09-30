@@ -169,3 +169,36 @@ input:focus, textarea:focus { outline: 2px solid #d9c9a8; }
 .row-flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .muted { color: var(--ink-soft); font-size: 13px; }
 .edition-item { display: flex; justify-content: space-between; align-items: center; }
+
+/* ---- 版本对照 ---- */
+.diff-sides { display: flex; align-items: stretch; gap: 14px; }
+.diff-side { flex: 1; border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; background: #fffdf7; }
+.diff-side-tag { font-size: 12px; color: var(--ink-soft); margin-bottom: 4px; }
+.diff-arrow { display: flex; align-items: center; font-size: 22px; color: var(--accent); }
+.diff-summary { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; font-size: 13px; color: var(--ink-soft); }
+
+.diff-line { padding: 5px 0; border-bottom: 1px dashed #ece2cd; }
+.diff-line-head { display: inline-block; min-width: 150px; color: var(--ink-soft); font-size: 13px; margin-right: 10px; }
+.diff-line-text { font-size: 17px; letter-spacing: 1px; white-space: pre-wrap; word-break: break-all; }
+.diff-ins { background: #d9ead1; border-radius: 2px; color: var(--ok); }
+.diff-del { background: #f2d7d4; border-radius: 2px; color: var(--danger); text-decoration: line-through; }
+.diff-oob { background: #f3ddbb; border-radius: 2px; }
+.pill.diffkind { margin-left: 0; margin-right: 6px; }
+.pill.diffkind-modified { background: #e2e8f1; color: var(--blue); }
+.pill.diffkind-added { background: #d9ead1; color: var(--ok); }
+.pill.diffkind-removed { background: #f2d7d4; color: var(--danger); }
+
+.diff-group { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 8px 0; background: #fffdf7; }
+.diff-group-changed { border-color: #d8c190; }
+.diff-unpaired { background: #fbf5ea; }
+.diff-group-head { font-weight: 600; margin-bottom: 4px; }
+.diff-cell-table { width: 100%; border-collapse: collapse; }
+.diff-cell-table td { border-top: 1px dashed #e6dcc7; padding: 4px 8px; vertical-align: top; }
+.cell-msname { width: 110px; color: var(--ink-soft); }
+.cell-side { width: 44%; }
+tr.cell-changed { background: #fdf8ee; }
+.diff-unpaired-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 12px; }
+.diff-unpaired-grid h4 { margin-bottom: 6px; }
+@media (max-width: 900px) {
+  .diff-unpaired-grid { grid-template-columns: 1fr; }
+}

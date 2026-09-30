@@ -328,6 +328,183 @@ async function main() {
         assert.strictEqual(r.status, 200);
         v2doc = (await call(base, 'GET', `/documents/${d2}`)).json;
         assert.strictEqual(v2doc.stats.brokenCount, 2, '切换底本后原两组均缺新底本片段');
+        // ---------- 版本对照：已发布校勘版 vs 当前工作版 ----------
+        r = await call(base, 'POST', '/documents', { title: `对照测试 ${++seq}`, manuscripts: ['X本', 'Y本'] });
+        assert.strictEqual(r.status, 201);
+        const d3 = r.json.id;
+        let d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        let d3ver = d3view.document.version;
+        const msX = d3view.manuscripts[0];
+        const msY = d3view.manuscripts[1];
+        // X：行1 ABCD，行2 EF；Y：行1 ABXD，行2 EF
+        await call(base, 'POST', `/manuscripts/${msX.id}/lines`, { expectedVersion: d3ver++, content: 'ABCD' });
+        await call(base, 'POST', `/manuscripts/${msX.id}/lines`, { expectedVersion: d3ver++, content: 'EF' });
+        await call(base, 'POST', `/manuscripts/${msY.id}/lines`, { expectedVersion: d3ver++, content: 'ABXD' });
+        await call(base, 'POST', `/manuscripts/${msY.id}/lines`, { expectedVersion: d3ver++, content: 'EF' });
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        const d3lines = (msId) => d3view.rawByMs.find((x) => x.msId === msId).lines;
+        const xl1 = d3lines(msX.id)[0].lineId, xl2 = d3lines(msX.id)[1].lineId;
+        const yl1 = d3lines(msY.id)[0].lineId, yl2 = d3lines(msY.id)[1].lineId;
+        const d3groups = [
+            { ord: 1, fragments: [
+                    { msId: msX.id, lineId: xl1, startCp: 0, endCp: 2 },
+                    { msId: msY.id, lineId: yl1, startCp: 0, endCp: 2 },
+                ] },
+            { ord: 2, fragments: [
+                    { msId: msX.id, lineId: xl1, startCp: 2, endCp: 3 },
+                    { msId: msY.id, lineId: yl1, startCp: 2, endCp: 3 },
+                ] },
+            { ord: 3, fragments: [
+                    { msId: msX.id, lineId: xl1, startCp: 3, endCp: 4 },
+                    { msId: msY.id, lineId: yl1, startCp: 3, endCp: 4 },
+                ] },
+            { ord: 4, fragments: [
+                    { msId: msX.id, lineId: xl2, startCp: 0, endCp: 2 },
+                    { msId: msY.id, lineId: yl2, startCp: 0, endCp: 2 },
+                ] },
+        ];
+        r = await call(base, 'PUT', `/documents/${d3}/groups`, { expectedVersion: d3view.document.version, groups: d3groups });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        r = await call(base, 'POST', `/documents/${d3}/publish`, { expectedVersion: d3view.document.version });
+        assert.strictEqual(r.status, 201, JSON.stringify(r.json));
+        const workVerAtPublish = (await call(base, 'GET', `/documents/${d3}`)).json.document.version;
+        // 刚发布：对照无任何变更，两侧底本/版本号齐备
+        let diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        assert.strictEqual(diff.oldSide.editionNo, 1);
+        assert.strictEqual(diff.oldSide.baseMsName, 'X本');
+        assert.strictEqual(diff.newSide.baseMsName, 'X本');
+        assert.strictEqual(diff.baseChanged, false);
+        assert.strictEqual(diff.stats.pairedCount, 4);
+        assert.strictEqual(diff.stats.pairedChangedCount, 0);
+        assert.strictEqual(diff.lineChanges.length, 0);
+        assert.strictEqual(diff.unpairedOldGroups.length, 0);
+        assert.strictEqual(diff.unpairedNewGroups.length, 0);
+        // 旧版不存在 → 404 明确报错
+        r = await call(base, 'GET', `/documents/${d3}/editions/9/diff`);
+        await expectFail(r, 404, '不存在');
+        // 改原文（与组2相交 → 组2 待修复）：Y 行1 ABXD → ABCD
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        r = await call(base, 'PUT', `/lines/${yl1}`, { expectedVersion: d3view.document.version, startCp: 2, endCp: 3, replacement: 'C' });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        // 行文：按原始行号的逐码点增删改
+        assert.strictEqual(diff.stats.linesModified, 1);
+        assert.strictEqual(diff.lineChanges[0].msName, 'Y本');
+        assert.strictEqual(diff.lineChanges[0].lineNo, 1);
+        assert.deepStrictEqual(diff.lineChanges[0].changes.map((c) => c.op), ['eq', 'del', 'ins', 'eq']);
+        assert.deepStrictEqual(diff.lineChanges[0].changes.map((c) => c.text), ['AB', 'X', 'C', 'D']);
+        // 组1/3/4 仍唯一配对（不凭组 ID）；组2：新侧待修复 → 未配对并显式标识；旧侧无对应键 → 未配对
+        assert.strictEqual(diff.stats.pairedCount, 3);
+        assert.strictEqual(diff.unpairedOldGroups.length, 1);
+        assert.strictEqual(diff.unpairedOldGroups[0].ord, 2);
+        assert.strictEqual(diff.unpairedOldGroups[0].reason, 'unmatched');
+        assert.strictEqual(diff.unpairedNewGroups.length, 1);
+        assert.strictEqual(diff.unpairedNewGroups[0].ord, 2);
+        assert.strictEqual(diff.unpairedNewGroups[0].broken, true, '待修复组须显式标识');
+        assert.strictEqual(diff.unpairedNewGroups[0].reason, 'broken-base');
+        const brokenYcell = diff.unpairedNewGroups[0].cells.find((c) => c.msId === msY.id);
+        assert.strictEqual(brokenYcell.status, 'broken', '越界/待修复片段不得当作确定文字');
+        // 对照是只读：工作版版本号不变
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        assert.strictEqual(d3view.document.version, workVerAtPublish + 1);
+        // 修复组2（重新整批重存会更换组 ID，仍应凭底本位置配上）
+        r = await call(base, 'PUT', `/documents/${d3}/groups/${diff.unpairedNewGroups[0].groupId}/repair`, {
+            expectedVersion: d3view.document.version,
+            group: { ord: 2, fragments: [
+                    { msId: msX.id, lineId: xl1, startCp: 2, endCp: 3 },
+                    { msId: msY.id, lineId: yl1, startCp: 2, endCp: 3 },
+                ] },
+        });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        assert.strictEqual(diff.stats.pairedCount, 4, '修复后全部凭底本位置重新配对');
+        assert.strictEqual(diff.unpairedOldGroups.length, 0);
+        assert.strictEqual(diff.unpairedNewGroups.length, 0);
+        const pair2 = diff.pairedGroups.find((g) => g.oldOrd === 2);
+        assert.strictEqual(pair2.changed, true);
+        const py = pair2.cells.find((c) => c.msId === msY.id);
+        assert.deepStrictEqual(py.charChanges.map((c) => [c.op, c.text]), [['del', 'X'], ['ins', 'C']]);
+        // 整批重存 + 组序调整（组3 与组4 的 ord 互换）：ID 全新，靠位置配对并报 ordChanged
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        const reordered = JSON.parse(JSON.stringify(d3groups));
+        reordered[2].ord = 4;
+        reordered[3].ord = 3;
+        r = await call(base, 'PUT', `/documents/${d3}/groups`, { expectedVersion: d3view.document.version, groups: reordered });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        assert.strictEqual(diff.stats.pairedCount, 4);
+        const moved = diff.pairedGroups.find((g) => g.oldOrd === 3);
+        assert.strictEqual(moved.newOrd, 4);
+        assert.strictEqual(moved.ordChanged, true);
+        assert.deepStrictEqual(diff.pairedGroups.map((g) => g.oldOrd), [1, 2, 3, 4], '配对组按旧组序排列');
+        // 缺文标记变化：Y 在组1 标缺文（底本位置不变 → 仍配对，单元格 status text→missing）
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        const withMissing = JSON.parse(JSON.stringify(d3groups));
+        withMissing[1].fragments[1] = { msId: msY.id, missing: true };
+        r = await call(base, 'PUT', `/documents/${d3}/groups`, { expectedVersion: d3view.document.version, groups: withMissing });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        const p1 = diff.pairedGroups.find((g) => g.oldOrd === 2);
+        const c1y = p1.cells.find((c) => c.msId === msY.id);
+        assert.strictEqual(c1y.oldStatus, 'text');
+        assert.strictEqual(c1y.newStatus, 'missing');
+        assert.strictEqual(c1y.changed, true);
+        // 删除组4：旧组4 无位置对应 → 未配对（不推断移动）
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        r = await call(base, 'PUT', `/documents/${d3}/groups`, { expectedVersion: d3view.document.version, groups: d3groups });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        const g4id = d3view.groups.find((g) => g.ord === 4).id;
+        r = await call(base, 'DELETE', `/documents/${d3}/groups/${g4id}`, { expectedVersion: d3view.document.version });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        assert.strictEqual(diff.stats.pairedCount, 3);
+        assert.strictEqual(diff.unpairedOldGroups.length, 1);
+        assert.strictEqual(diff.unpairedOldGroups[0].ord, 4);
+        assert.strictEqual(diff.unpairedOldGroups[0].baseText, 'EF');
+        assert.strictEqual(diff.unpairedNewGroups.length, 0);
+        // 新增抄本：manuscripts 标记 added
+        d3view = (await call(base, 'GET', `/documents/${d3}`)).json;
+        r = await call(base, 'POST', `/documents/${d3}/manuscripts`, { expectedVersion: d3view.document.version, name: 'Z本' });
+        assert.strictEqual(r.status, 201, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+        assert.ok(diff.manuscripts.some((m) => m.newName === 'Z本' && m.kind === 'added'));
+        // ---------- 底本不同：旧组新组分别列出，绝不配对 ----------
+        r = await call(base, 'POST', '/documents', { title: `底本切换对照 ${++seq}`, manuscripts: ['P本', 'Q本'] });
+        assert.strictEqual(r.status, 201);
+        const d4 = r.json.id;
+        let d4view = (await call(base, 'GET', `/documents/${d4}`)).json;
+        const msP = d4view.manuscripts[0], msQ = d4view.manuscripts[1];
+        await call(base, 'POST', `/manuscripts/${msP.id}/lines`, { expectedVersion: d4view.document.version, content: '甲乙' });
+        await call(base, 'POST', `/manuscripts/${msQ.id}/lines`, { expectedVersion: d4view.document.version + 1, content: '甲乙' });
+        d4view = (await call(base, 'GET', `/documents/${d4}`)).json;
+        const pl = d4view.rawByMs[0].lines[0].lineId;
+        const ql = d4view.rawByMs[1].lines[0].lineId;
+        r = await call(base, 'PUT', `/documents/${d4}/groups`, {
+            expectedVersion: d4view.document.version,
+            groups: [{ ord: 1, fragments: [
+                        { msId: msP.id, lineId: pl, startCp: 0, endCp: 2 },
+                        { msId: msQ.id, missing: true },
+                    ] }],
+        });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        d4view = (await call(base, 'GET', `/documents/${d4}`)).json;
+        r = await call(base, 'POST', `/documents/${d4}/publish`, { expectedVersion: d4view.document.version });
+        assert.strictEqual(r.status, 201, JSON.stringify(r.json));
+        d4view = (await call(base, 'GET', `/documents/${d4}`)).json;
+        r = await call(base, 'PUT', `/documents/${d4}/base`, { expectedVersion: d4view.document.version, msId: msQ.id });
+        assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+        diff = (await call(base, 'GET', `/documents/${d4}/editions/1/diff`)).json;
+        assert.strictEqual(diff.baseChanged, true);
+        assert.strictEqual(diff.oldSide.baseMsName, 'P本');
+        assert.strictEqual(diff.newSide.baseMsName, 'Q本');
+        assert.strictEqual(diff.pairedGroups.length, 0, '底本不同不得配对');
+        assert.strictEqual(diff.unpairedOldGroups.length, 1);
+        assert.strictEqual(diff.unpairedNewGroups.length, 1);
+        assert.strictEqual(diff.unpairedOldGroups[0].reason, 'base-mismatch');
+        assert.strictEqual(diff.unpairedNewGroups[0].reason, 'base-mismatch');
+        assert.strictEqual(diff.unpairedNewGroups[0].broken, true, '切底本后旧组缺新底本片段 → 待修复并显式标识');
         console.log('✅ 全部集成测试通过');
     }
     finally {

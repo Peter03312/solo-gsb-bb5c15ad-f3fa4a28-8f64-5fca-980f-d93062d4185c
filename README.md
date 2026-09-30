@@ -112,6 +112,23 @@ npm run dev          # http://localhost:5173 （/api 自动代理到 4000）
 - 发布生成 **不可变快照**（JSONB）。发布后继续修改只影响工作版，
   **旧发布版始终可阅读**（“发布与旧版”页签 → 阅读此版）。
 
+### 版本对照（任一已发布校勘版 ↔ 当前工作版）
+- “发布与旧版”页签 → **与工作版对照**，或在“版本对照”页签选择任一已发布版本；
+- **行文增删改**：按各抄本 **原始行号** 逐行呈现，按 Unicode 码点对齐显示
+  <span>增（绿）</span>/删（红）/改；
+- **组的变化**：按对应组呈现组序变化、各抄本片段（文字、所在行与码点区间）及
+  **缺文标记**的变化；页头同时显示两侧 **底本与版本号**
+  （旧版快照的工作版版本号 / 发布号，与当前工作版版本号）；
+- **配对规则（关键）**：整批重存会更换全部组 ID，故 **绝不凭组 ID 判定增删**：
+  仅当 **底本相同** 且底本片段位置（原始行号 + 码点区间）在两侧都 **唯一对应** 时才配为一组；
+  无法唯一配对的旧组与新组 **分别列为“未配对旧组 / 未配对新组”**，不推断移动；
+  位置键在任一侧重复的组同样列未配对；
+- **底本不同**：所有旧组、新组一律分别列未配对（原因标注“底本不同”），不做配对；
+- **待修复组**显式标识；其越界片段只显示越界前现存文字（橙色），
+  **不当作确定文字**参与文字比对，且不参与配对（原因“底本片段位置失效”）；
+- 对照 **只读**：不修改工作版、也不修改任何快照；点“刷新对照”即按最新工作版重新生成；
+- **旧版不存在时返回 404 明确报错**。页面与下方 HTTP API 取得完全相同的结果。
+
 ### 并发控制
 - 所有写请求必须携带 `expectedVersion`（乐观锁）；
 - 基于过期版本的修改返回 **409 拒绝**，不做任何写入，前端提示刷新后重试；
@@ -135,8 +152,70 @@ npm run dev          # http://localhost:5173 （/api 自动代理到 4000）
 | DELETE | `/api/documents/:id/groups/:gid` | 删除对应组 |
 | POST | `/api/documents/:id/publish` | 发布新版（有待修复组则 409） |
 | GET | `/api/documents/:id/editions` / `…/editions/:no` | 版本列表 / 阅读旧版快照 |
+| GET | `/api/documents/:id/editions/:no/diff` | **版本对照**：第 :no 版快照 vs 当前工作版（只读） |
 
 写请求体均含 `expectedVersion`；错误响应：`{ "error": "...", "details": [ { "code", "message", "groupOrd", "msName", "lineNo", ... } ] }`。
+
+#### 版本对照 API 调用示例
+
+```bash
+# 第 2 版（旧版快照）与当前工作版的变更对照
+curl -s http://localhost:4000/api/documents/1/editions/2/diff | jq .
+```
+
+返回要点（页面渲染的就是同一份 JSON）：
+
+```jsonc
+{
+  "documentId": 1,
+  "baseChanged": false,
+  "oldSide": { "editionNo": 2, "version": 13, "baseMsId": 10, "baseMsName": "甲本" },
+  "newSide": { "version": 18, "baseMsId": 10, "baseMsName": "甲本" },
+  "manuscripts": [
+    { "msId": 10, "oldName": "甲本", "newName": "甲本", "kind": "same" }
+  ],
+  // 行文增删改：按抄本、原始行号；op: eq/ins/del（逐码点对齐）
+  "lineChanges": [
+    { "msId": 11, "msName": "乙本", "lineNo": 1, "kind": "modified",
+      "changes": [ { "op": "eq", "text": "天命" },
+                   { "op": "del", "text": "姓" },
+                   { "op": "ins", "text": "性" },
+                   { "op": "eq", "text": "之謂性" } ] }
+  ],
+  // 已配对组（同底本且底本片段行号+码点区间唯一对应；不用组 ID）
+  "pairedGroups": [
+    { "kind": "paired", "oldOrd": 1, "newOrd": 2, "ordChanged": true,
+      "oldBroken": false, "newBroken": false,
+      "oldBaseText": "天命", "newBaseText": "天命",
+      "cells": [
+        { "msId": 11, "msName": "乙本",
+          "oldStatus": "text", "newStatus": "text", "changed": true,
+          "oldText": "姓", "newText": "性",
+          "oldLineNo": 1, "newLineNo": 1,
+          "oldStartCp": 4, "oldEndCp": 5, "newStartCp": 4, "newEndCp": 5,
+          "charChanges": [ { "op": "del", "text": "姓" },
+                           { "op": "ins", "text": "性" } ] }
+      ] }
+  ],
+  // 无法唯一配对的旧组 / 新组（底本不同时全部在此；待修复组在新侧并 broken:true）
+  "unpairedOldGroups": [
+    { "kind": "unpaired", "side": "old", "ord": 4, "broken": false,
+      "reason": "unmatched", "baseText": "EF",
+      "cells": [ /* 同单格结构：status=text/missing/broken/absent */ ] }
+  ],
+  "unpairedNewGroups": [],
+  "stats": { "pairedCount": 4, "pairedChangedCount": 2,
+             "unpairedOldCount": 1, "unpairedNewCount": 0,
+             "linesModified": 1, "linesAdded": 0, "linesRemoved": 0 }
+}
+```
+
+- 单元格状态 `status`：`text`（确定文字）/ `missing`（显式缺文）/
+  `broken`（待修复，越界片段非确定文字，含 `oobEnd`）/ `absent`（该组无此抄本片段）；
+- 未配对原因 `reason`：`unmatched`（底本位置无对应）、`duplicate-key`（位置不唯一）、
+  `broken-base`（待修复、底本位置失效）、`base-mismatch`（两侧底本不同）；
+- 旧版不存在：`404 { "error": "校勘版 #9 不存在，无法与工作版对照（旧版永久保留可读）" }`；
+- 该接口为 GET 只读，不接受也不需要 `expectedVersion`，重复调用始终反映 **最新工作版**。
 
 ---
 
@@ -151,7 +230,10 @@ npm test
 
 覆盖：合法归组、异文/缺文判定、倒置、越界/重叠/缺底本/重复抄本报错定位、
 整体拒绝不部分保存、乐观锁 409、改字仅波及相关组、平移、缩短越界、
-修复流程、发布门禁、旧版快照可读、切换底本等。
+修复流程、发布门禁、旧版快照可读、切换底本等；以及 **版本对照**：
+刚发布零差异、行级逐码点增删改、待修复组不参与配对且显式标识、
+整批重存换 ID 后凭底本位置配对、组序变化、缺文标记变化、删组未配对、
+新增抄本、底本不同全部分列未配对、旧版不存在 404、对照只读不改版本号。
 
 ---
 

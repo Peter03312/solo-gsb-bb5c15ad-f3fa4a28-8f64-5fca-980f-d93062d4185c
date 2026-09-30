@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, ApiError } from '../api';
-import type { CollationView } from '../types';
+import type { CollationView, EditionSummary } from '../types';
 import { TranscribeTab } from './TranscribeTab';
 import { GroupTab } from './GroupTab';
 import { CollationPage } from './CollationPage';
 import { PublishTab } from './PublishTab';
+import { DiffTab } from './DiffTab';
 import { ErrorBox } from '../ErrorBox';
 
-type Tab = 'transcribe' | 'group' | 'collation' | 'publish';
+type Tab = 'transcribe' | 'group' | 'collation' | 'diff' | 'publish';
 
 export function Workspace({
   docId,
@@ -24,6 +25,8 @@ export function Workspace({
   const [issues, setIssues] = useState<unknown>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [stale, setStale] = useState(false);
+  const [editions, setEditions] = useState<EditionSummary[]>([]);
+  const [diffEditionNo, setDiffEditionNo] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     const v = await api.getDocument(docId);
@@ -31,9 +34,20 @@ export function Workspace({
     setStale(false);
   }, [docId]);
 
+  const refreshEditions = useCallback(async () => {
+    const r = await api.listEditions(docId);
+    setEditions(r.editions);
+  }, [docId]);
+
   useEffect(() => {
     reload().catch((e) => setError(String(e.message ?? e)));
-  }, [reload]);
+    refreshEditions().catch(() => undefined);
+  }, [reload, refreshEditions]);
+
+  const openDiff = useCallback((no: number) => {
+    setDiffEditionNo(no);
+    setTab('diff');
+  }, []);
 
   const raise = useCallback((msg: string, details?: unknown) => {
     setNotice(null);
@@ -94,6 +108,9 @@ export function Workspace({
           <button className={tab === 'collation' ? 'active' : ''} onClick={() => setTab('collation')}>
             校勘对照
           </button>
+          <button className={tab === 'diff' ? 'active' : ''} onClick={() => setTab('diff')}>
+            版本对照
+          </button>
           <button className={tab === 'publish' ? 'active' : ''} onClick={() => setTab('publish')}>
             发布与旧版
           </button>
@@ -106,12 +123,23 @@ export function Workspace({
           <GroupTab view={view} version={version} reload={reload} onError={raise} onNotice={flash} />
         )}
         {tab === 'collation' && <CollationPage view={view} />}
+        {tab === 'diff' && (
+          <DiffTab
+            docId={docId}
+            editions={editions}
+            initialNo={diffEditionNo}
+            onError={raise}
+            onNotice={flash}
+          />
+        )}
         {tab === 'publish' && (
           <PublishTab
             view={view}
             version={version}
             reload={reload}
             onOpenEdition={onOpenEdition}
+            onCompareEdition={openDiff}
+            onPublished={refreshEditions}
             onError={raise}
             onNotice={flash}
           />

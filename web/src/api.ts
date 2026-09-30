@@ -60,6 +60,9 @@ export const api = {
       'GET',
       `/api/documents/${id}/editions/${no}`
     ),
+  /** 已发布校勘版 vs 当前工作版的变更对照（只读，刷新取最新工作版）。 */
+  getEditionDiff: (id: number, no: number) =>
+    req<EditionDiff>('GET', `/api/documents/${id}/editions/${no}/diff`),
 };
 
-import type { CollationView, DocumentSummary, EditionSummary } from './types';
+import type { CollationView, DocumentSummary, EditionDiff, EditionSummary } from './types';

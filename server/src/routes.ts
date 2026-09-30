@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { withTx } from './db';
 import { buildView } from './collation';
+import { buildEditionDiff } from './diff';
 import { validateGroups } from './validate';
 import { charLen, HttpError, isInt, sliceCp } from './util';
 import {
@@ -446,5 +447,36 @@ router.get(
     );
     if (rows.length === 0) throw new HttpError(404, `校勘版 #${no} 不存在（旧版永久保留可读）`);
     res.json({ editionNo: rows[0].edition_no, createdAt: rows[0].created_at, view: rows[0].snapshot });
+  })
+);
+
+/**
+ * 已发布校勘版 vs 当前工作版的变更对照（只读）。
+ *  - 旧版不存在 → 404 明确报错；
+ *  - 每次请求实时构建工作版读模型，刷新即反映最新工作版；
+ *  - 不修改工作版与任何快照。
+ */
+router.get(
+  '/documents/:id/editions/:no/diff',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const no = Number(req.params.no);
+    if (!Number.isInteger(no) || no < 1) throw new HttpError(400, '版本号必须是正整数');
+    const { query } = await import('./db');
+    const { rows } = await query(
+      'SELECT edition_no, snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2',
+      [id, no]
+    );
+    if (rows.length === 0) {
+      throw new HttpError(404, `校勘版 #${no} 不存在，无法与工作版对照（旧版永久保留可读）`);
+    }
+    const result = await withTx(async (c) => {
+      const current = await buildView(c, await getDoc(c, id));
+      return buildEditionDiff(rows[0].snapshot, current, {
+        editionNo: rows[0].edition_no,
+        createdAt: rows[0].created_at,
+      });
+    });
+    res.json(result);
   })
 );

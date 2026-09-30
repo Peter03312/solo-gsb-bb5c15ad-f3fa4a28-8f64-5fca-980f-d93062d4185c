@@ -8,6 +8,8 @@ export function PublishTab({
   version,
   reload,
   onOpenEdition,
+  onCompareEdition,
+  onPublished,
   onError,
   onNotice,
 }: {
@@ -15,6 +17,8 @@ export function PublishTab({
   version: number;
   reload: () => Promise<void>;
   onOpenEdition: (no: number) => void;
+  onCompareEdition: (no: number) => void;
+  onPublished: () => Promise<void>;
   onError: (msg: string, details?: unknown) => void;
   onNotice: (msg: string) => void;
 }) {
@@ -39,6 +43,7 @@ export function PublishTab({
       const { editionNo } = await api.publish(view.document.id, version);
       await reload();
       await refreshEditions();
+      await onPublished();
       onNotice(`校勘版 第 ${editionNo} 版 已发布；此后继续修改不影响旧版阅读。`);
     } catch (e) {
       onError((e as Error).message, (e as { details?: unknown }).details);
@@ -82,7 +87,10 @@ export function PublishTab({
                 {new Date(e.created_at).toLocaleString('zh-CN')}
               </span>
             </div>
-            <button onClick={() => onOpenEdition(e.edition_no)}>阅读此版</button>
+            <div className="row-flex">
+              <button onClick={() => onOpenEdition(e.edition_no)}>阅读此版</button>
+              <button onClick={() => onCompareEdition(e.edition_no)}>与工作版对照</button>
+            </div>
           </div>
         ))}
       </div>
