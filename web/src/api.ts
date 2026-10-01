@@ -60,6 +60,8 @@ export const api = {
       'GET',
       `/api/documents/${id}/editions/${no}`
     ),
+  getEditionDiff: (id: number, no: number) =>
+    req<EditionDiff>('GET', `/api/documents/${id}/editions/${no}/diff`),
 };
 
-import type { CollationView, DocumentSummary, EditionSummary } from './types';
+import type { CollationView, DocumentSummary, EditionDiff, EditionSummary } from './types';

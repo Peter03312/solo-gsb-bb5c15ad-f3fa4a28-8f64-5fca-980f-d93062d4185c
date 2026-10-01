@@ -8,6 +8,7 @@ export function PublishTab({
   version,
   reload,
   onOpenEdition,
+  onOpenDiff,
   onError,
   onNotice,
 }: {
@@ -15,6 +16,7 @@ export function PublishTab({
   version: number;
   reload: () => Promise<void>;
   onOpenEdition: (no: number) => void;
+  onOpenDiff: (no: number) => void;
   onError: (msg: string, details?: unknown) => void;
   onNotice: (msg: string) => void;
 }) {
@@ -82,7 +84,10 @@ export function PublishTab({
                 {new Date(e.created_at).toLocaleString('zh-CN')}
               </span>
             </div>
-            <button onClick={() => onOpenEdition(e.edition_no)}>阅读此版</button>
+            <div className="row-flex">
+              <button onClick={() => onOpenDiff(e.edition_no)}>与当前工作版对照</button>
+              <button onClick={() => onOpenEdition(e.edition_no)}>阅读此版</button>
+            </div>
           </div>
         ))}
       </div>

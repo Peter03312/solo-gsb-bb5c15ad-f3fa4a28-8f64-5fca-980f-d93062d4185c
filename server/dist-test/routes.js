@@ -1,42 +1,10 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.router = void 0;
 const express_1 = require("express");
 const db_1 = require("./db");
 const collation_1 = require("./collation");
+const diff_1 = require("./diff");
 const validate_1 = require("./validate");
 const util_1 = require("./util");
 const repo_1 = require("./repo");
@@ -45,8 +13,7 @@ exports.router = (0, express_1.Router)();
 const wrap = (fn) => (req, res, next) => fn(req, res).catch(next);
 // ---------- 文献 ----------
 exports.router.get('/documents', wrap(async (_req, res) => {
-    const { query } = await Promise.resolve().then(() => __importStar(require('./db')));
-    const { rows } = await query(`SELECT d.id, d.title, d.version, d.published_ver,
+    const { rows } = await (0, db_1.query)(`SELECT d.id, d.title, d.version, d.published_ver,
               d.base_ms_id,
               (SELECT count(*) FROM manuscripts m WHERE m.doc_id=d.id)::int AS ms_count,
               (SELECT count(*) FROM grp g WHERE g.doc_id=d.id AND g.broken)::int AS broken_count
@@ -315,27 +282,52 @@ exports.router.post('/documents/:id/publish', wrap(async (req, res) => {
         const { rows: gc } = await c.query('SELECT count(*)::int AS n FROM grp WHERE doc_id=$1', [id]);
         if (gc[0].n === 0)
             throw new util_1.HttpError(400, '还没有任何对应组，不能发布');
-        const view = await (0, collation_1.buildView)(c, doc);
         const editionNo = doc.published_ver + 1;
-        await c.query('INSERT INTO editions (doc_id, edition_no, snapshot) VALUES ($1,$2,$3)', [id, editionNo, JSON.stringify(view)]);
         await c.query('UPDATE documents SET published_ver=$1 WHERE id=$2', [editionNo, id]);
+        // 快照固化“发布定稿”状态：先落版本号（乐观锁 +1），再构建读模型，
+        // 使快照 document.version 即该已发布版对应的版本号
         await (0, repo_1.bumpVersion)(c, id);
+        const published = await (0, repo_1.getDoc)(c, id);
+        const view = await (0, collation_1.buildView)(c, published);
+        await c.query('INSERT INTO editions (doc_id, edition_no, snapshot) VALUES ($1,$2,$3)', [id, editionNo, JSON.stringify(view)]);
         return editionNo;
     });
     res.status(201).json({ editionNo: result });
 }));
 exports.router.get('/documents/:id/editions', wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const { query } = await Promise.resolve().then(() => __importStar(require('./db')));
-    const { rows } = await query('SELECT id, edition_no, created_at FROM editions WHERE doc_id=$1 ORDER BY edition_no DESC', [id]);
+    const { rows } = await (0, db_1.query)('SELECT id, edition_no, created_at FROM editions WHERE doc_id=$1 ORDER BY edition_no DESC', [id]);
     res.json({ editions: rows });
 }));
 exports.router.get('/documents/:id/editions/:no', wrap(async (req, res) => {
     const id = Number(req.params.id);
     const no = Number(req.params.no);
-    const { query } = await Promise.resolve().then(() => __importStar(require('./db')));
-    const { rows } = await query('SELECT edition_no, snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2', [id, no]);
+    const { rows } = await (0, db_1.query)('SELECT edition_no, snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2', [id, no]);
     if (rows.length === 0)
         throw new util_1.HttpError(404, `校勘版 #${no} 不存在（旧版永久保留可读）`);
     res.json({ editionNo: rows[0].edition_no, createdAt: rows[0].created_at, view: rows[0].snapshot });
+}));
+/**
+ * 版本对照：任一已发布校勘版（旧，不可变快照）vs 当前工作版（新，实时读模型）。
+ * 只读：不修改工作版，也不修改任何快照；刷新后重新取即反映最新工作版。
+ * 旧版不存在 → 404（错误信息明确指出该版不存在）。
+ */
+exports.router.get('/documents/:id/editions/:no/diff', wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const no = Number(req.params.no);
+    if (!(0, util_1.isInt)(no) || no < 1)
+        throw new util_1.HttpError(400, '校勘版编号必须是正整数');
+    const result = await (0, db_1.withTx)(async (c) => {
+        const doc = await (0, repo_1.getDoc)(c, id);
+        const { rows } = await c.query('SELECT snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2', [id, no]);
+        if (rows.length === 0) {
+            throw new util_1.HttpError(404, doc.published_ver === 0
+                ? `校勘版 #${no} 不存在：本文献尚未发布过任何校勘版`
+                : `校勘版 #${no} 不存在：当前仅发布至第 ${doc.published_ver} 版`, { requestedEdition: no, latestEdition: doc.published_ver });
+        }
+        const oldView = rows[0].snapshot;
+        const newView = await (0, collation_1.buildView)(c, doc);
+        return (0, diff_1.buildEditionDiff)(oldView, newView, rows[0].created_at.toISOString());
+    });
+    res.json(result);
 }));

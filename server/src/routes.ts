@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { withTx } from './db';
+import { withTx, query } from './db';
 import { buildView } from './collation';
+import { buildEditionDiff } from './diff';
 import { validateGroups } from './validate';
 import { charLen, HttpError, isInt, sliceCp } from './util';
 import {
@@ -26,7 +27,6 @@ const wrap =
 router.get(
   '/documents',
   wrap(async (_req, res) => {
-    const { query } = await import('./db');
     const { rows } = await query(
       `SELECT d.id, d.title, d.version, d.published_ver,
               d.base_ms_id,
@@ -407,14 +407,17 @@ router.post(
       );
       if (gc[0].n === 0) throw new HttpError(400, '还没有任何对应组，不能发布');
 
-      const view = await buildView(c, doc);
       const editionNo = doc.published_ver + 1;
+      await c.query('UPDATE documents SET published_ver=$1 WHERE id=$2', [editionNo, id]);
+      // 快照固化“发布定稿”状态：先落版本号（乐观锁 +1），再构建读模型，
+      // 使快照 document.version 即该已发布版对应的版本号
+      await bumpVersion(c, id);
+      const published = await getDoc(c, id);
+      const view = await buildView(c, published);
       await c.query(
         'INSERT INTO editions (doc_id, edition_no, snapshot) VALUES ($1,$2,$3)',
         [id, editionNo, JSON.stringify(view)]
       );
-      await c.query('UPDATE documents SET published_ver=$1 WHERE id=$2', [editionNo, id]);
-      await bumpVersion(c, id);
       return editionNo;
     });
     res.status(201).json({ editionNo: result });
@@ -425,7 +428,6 @@ router.get(
   '/documents/:id/editions',
   wrap(async (req, res) => {
     const id = Number(req.params.id);
-    const { query } = await import('./db');
     const { rows } = await query(
       'SELECT id, edition_no, created_at FROM editions WHERE doc_id=$1 ORDER BY edition_no DESC',
       [id]
@@ -439,12 +441,45 @@ router.get(
   wrap(async (req, res) => {
     const id = Number(req.params.id);
     const no = Number(req.params.no);
-    const { query } = await import('./db');
     const { rows } = await query(
       'SELECT edition_no, snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2',
       [id, no]
     );
     if (rows.length === 0) throw new HttpError(404, `校勘版 #${no} 不存在（旧版永久保留可读）`);
     res.json({ editionNo: rows[0].edition_no, createdAt: rows[0].created_at, view: rows[0].snapshot });
+  })
+);
+
+/**
+ * 版本对照：任一已发布校勘版（旧，不可变快照）vs 当前工作版（新，实时读模型）。
+ * 只读：不修改工作版，也不修改任何快照；刷新后重新取即反映最新工作版。
+ * 旧版不存在 → 404（错误信息明确指出该版不存在）。
+ */
+router.get(
+  '/documents/:id/editions/:no/diff',
+  wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const no = Number(req.params.no);
+    if (!isInt(no) || no < 1) throw new HttpError(400, '校勘版编号必须是正整数');
+    const result = await withTx(async (c) => {
+      const doc = await getDoc(c, id);
+      const { rows } = await c.query<{ snapshot: unknown; created_at: Date }>(
+        'SELECT snapshot, created_at FROM editions WHERE doc_id=$1 AND edition_no=$2',
+        [id, no]
+      );
+      if (rows.length === 0) {
+        throw new HttpError(
+          404,
+          doc.published_ver === 0
+            ? `校勘版 #${no} 不存在：本文献尚未发布过任何校勘版`
+            : `校勘版 #${no} 不存在：当前仅发布至第 ${doc.published_ver} 版`,
+          { requestedEdition: no, latestEdition: doc.published_ver }
+        );
+      }
+      const oldView = rows[0].snapshot as import('./types').CollationView;
+      const newView = await buildView(c, doc);
+      return buildEditionDiff(oldView, newView, rows[0].created_at.toISOString());
+    });
+    res.json(result);
   })
 );

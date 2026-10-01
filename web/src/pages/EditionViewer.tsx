@@ -8,11 +8,13 @@ export function EditionViewer({
   editionNo,
   onBack,
   onHome,
+  onDiff,
 }: {
   docId: number;
   editionNo: number;
   onBack: () => void;
   onHome: () => void;
+  onDiff: () => void;
 }) {
   const [data, setData] = useState<{ view: CollationView; createdAt: string } | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -32,6 +34,7 @@ export function EditionViewer({
         <span className="crumb" onClick={onBack}>返回工作区</span>
         <span className="spacer" />
         <h1>已发布 · 第 {editionNo} 版（只读）</h1>
+        <button className="primary" onClick={onDiff}>与当前工作版对照</button>
       </div>
       <div className="container">
         {err && <div className="error-box">{err}</div>}

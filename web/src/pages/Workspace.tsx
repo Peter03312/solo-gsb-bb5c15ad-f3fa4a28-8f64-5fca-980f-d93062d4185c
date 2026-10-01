@@ -13,10 +13,12 @@ export function Workspace({
   docId,
   onHome,
   onOpenEdition,
+  onOpenDiff,
 }: {
   docId: number;
   onHome: () => void;
   onOpenEdition: (no: number) => void;
+  onOpenDiff: (no: number) => void;
 }) {
   const [view, setView] = useState<CollationView | null>(null);
   const [tab, setTab] = useState<Tab>('transcribe');
@@ -112,6 +114,7 @@ export function Workspace({
             version={version}
             reload={reload}
             onOpenEdition={onOpenEdition}
+            onOpenDiff={onOpenDiff}
             onError={raise}
             onNotice={flash}
           />

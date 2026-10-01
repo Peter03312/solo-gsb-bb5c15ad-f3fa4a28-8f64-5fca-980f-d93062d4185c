@@ -169,3 +169,38 @@ input:focus, textarea:focus { outline: 2px solid #d9c9a8; }
 .row-flex { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .muted { color: var(--ink-soft); font-size: 13px; }
 .edition-item { display: flex; justify-content: space-between; align-items: center; }
+
+/* ---- 版本对照 ---- */
+.diff-sides { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: stretch; }
+.diff-side { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; background: #fffdf7; }
+.diff-side.old { background: #f6f1e6; }
+.diff-side.new { background: #f1f6ee; }
+.diff-side .side-tag { font-weight: 600; margin-bottom: 4px; }
+.diff-arrow { align-self: center; font-size: 20px; color: var(--ink-soft); }
+
+.api-example {
+  background: #2f3b4a; color: #f4ecd9; padding: 10px 12px; border-radius: 6px;
+  font-size: 13px; line-height: 1.6; overflow-x: auto; margin: 0;
+}
+
+.line-diff-row { padding: 6px 0; border-bottom: 1px dashed var(--line); }
+.line-diff-head { font-size: 13px; margin-bottom: 2px; }
+.line-diff-text { font-size: 17px; letter-spacing: 1px; white-space: pre-wrap; word-break: break-all; }
+.diff-add { background: #d8e6d2; border-radius: 2px; }
+.diff-del { background: #f1d4cf; text-decoration: line-through; text-decoration-color: var(--danger); }
+.diff-eq { }
+
+.paired-diff { border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; margin: 8px 0; background: #fffdf7; }
+.paired-head { font-size: 13px; margin-bottom: 6px; }
+.cell-diff-table { width: 100%; border-collapse: collapse; }
+.cell-diff-table th, .cell-diff-table td {
+  border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top;
+}
+.cell-diff-table th { background: #f2ecdc; font-weight: 600; font-size: 13px; }
+
+.unpaired-group { border-left: 3px solid #b9a98a; padding: 6px 12px; margin: 8px 0; background: #fffdf7; }
+.unpaired-group.is-broken { border-left-color: var(--warn); background: #fdf6ea; }
+.unpaired-head { font-size: 13px; margin-bottom: 4px; }
+.unpaired-cells { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 2px 14px; }
+.unpaired-cell { font-size: 14px; }
+.unpaired-cell .msname { display: inline-block; min-width: 70px; font-weight: 600; }

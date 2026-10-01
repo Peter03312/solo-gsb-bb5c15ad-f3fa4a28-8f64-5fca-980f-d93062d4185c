@@ -4,11 +4,13 @@ import type { CollationView, DocumentSummary } from './types';
 import { HomePage } from './pages/HomePage';
 import { Workspace } from './pages/Workspace';
 import { EditionViewer } from './pages/EditionViewer';
+import { EditionDiffPage } from './pages/EditionDiffPage';
 
 type Route =
   | { name: 'home' }
   | { name: 'doc'; id: number }
-  | { name: 'edition'; id: number; no: number };
+  | { name: 'edition'; id: number; no: number }
+  | { name: 'diff'; id: number; no: number };
 
 export function App() {
   const [route, setRoute] = useState<Route>({ name: 'home' });
@@ -27,6 +29,17 @@ export function App() {
         editionNo={route.no}
         onBack={() => setRoute({ name: 'doc', id: route.id })}
         onHome={() => setRoute({ name: 'home' })}
+        onDiff={() => setRoute({ name: 'diff', id: route.id, no: route.no })}
+      />
+    );
+  }
+  if (route.name === 'diff') {
+    return (
+      <EditionDiffPage
+        docId={route.id}
+        editionNo={route.no}
+        onBack={() => setRoute({ name: 'doc', id: route.id })}
+        onHome={() => setRoute({ name: 'home' })}
       />
     );
   }
@@ -35,6 +48,7 @@ export function App() {
       docId={route.id}
       onHome={() => setRoute({ name: 'home' })}
       onOpenEdition={(no) => setRoute({ name: 'edition', id: route.id, no })}
+      onOpenDiff={(no) => setRoute({ name: 'diff', id: route.id, no })}
     />
   );
 }

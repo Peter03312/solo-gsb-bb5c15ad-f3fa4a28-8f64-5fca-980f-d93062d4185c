@@ -79,3 +79,126 @@ export interface EditionSummary {
   edition_no: number;
   created_at: string;
 }
+
+// ---- 版本对照（已发布校勘版 vs 当前工作版）----
+
+export interface DiffSideInfo {
+  kind: 'edition' | 'working';
+  editionNo: number | null;
+  version: number;
+  baseMsId: number | null;
+  baseMsName: string | null;
+  publishedVer: number;
+  groupCount: number;
+  brokenCount: number;
+  createdAt?: string;
+}
+
+export interface DiffToken {
+  op: 'equal' | 'added' | 'removed';
+  text: string;
+}
+
+export interface LineDiff {
+  msId: number;
+  msName: string;
+  lineNo: number;
+  status: 'changed' | 'added' | 'removed';
+  oldLineId: number | null;
+  newLineId: number | null;
+  oldText: string;
+  newText: string;
+  segments: DiffToken[];
+}
+
+export interface CellChange {
+  msId: number;
+  msName: string;
+  isBase: boolean;
+  oldState: 'absent' | 'missing' | 'fragment';
+  newState: 'absent' | 'missing' | 'fragment';
+  changes: Array<'state' | 'location' | 'text' | 'broken'>;
+  textChanged: boolean;
+  oldOutOfBounds: boolean;
+  newOutOfBounds: boolean;
+  oldText: string | null;
+  newText: string | null;
+  newVisibleText: string | null;
+  newOobEnd: number | null;
+  oldBroken: boolean;
+  newBroken: boolean;
+  oldLineNo: number | null;
+  newLineNo: number | null;
+  oldStartCp: number | null;
+  newStartCp: number | null;
+  oldEndCp: number | null;
+  newEndCp: number | null;
+}
+
+export interface PairedGroupDiff {
+  status: 'same' | 'changed';
+  oldGroupId: number;
+  newGroupId: number;
+  oldOrd: number;
+  newOrd: number;
+  ordChanged: boolean;
+  oldBroken: boolean;
+  newBroken: boolean;
+  baseMsId: number;
+  baseLocation: { lineNo: number; startCp: number; endCp: number };
+  cellChanges: CellChange[];
+}
+
+export interface UnpairedCell {
+  msId: number;
+  msName: string;
+  isBase: boolean;
+  state: 'absent' | 'missing' | 'fragment';
+  broken: boolean;
+  outOfBounds: boolean;
+  text: string | null;
+  visibleText: string | null;
+  lineNo: number | null;
+  startCp: number | null;
+  endCp: number | null;
+  oobEnd: number | null;
+}
+
+export interface UnpairedGroupDiff {
+  side: 'old' | 'new';
+  groupId: number;
+  ord: number;
+  broken: boolean;
+  reason: 'base-differs' | 'no-base-location' | 'duplicate-location' | 'not-matched';
+  baseMsId: number | null;
+  baseText: string | null;
+  baseLocation: { lineNo: number; startCp: number; endCp: number } | null;
+  cells: UnpairedCell[];
+}
+
+export interface EditionDiff {
+  documentId: number;
+  title: string;
+  generatedAt: string;
+  sides: { old: DiffSideInfo; new: DiffSideInfo };
+  baseSame: boolean;
+  pairingNote: string;
+  manuscripts: Array<{
+    msId: number;
+    name: string;
+    inOld: boolean;
+    inNew: boolean;
+    oldPosition: number | null;
+    newPosition: number | null;
+    isOldBase: boolean;
+    isNewBase: boolean;
+  }>;
+  textChanges: LineDiff[];
+  textChangeCounts: { manuscriptCount: number; changed: number; added: number; removed: number };
+  groupDiff: {
+    paired: PairedGroupDiff[];
+    unpairedOld: UnpairedGroupDiff[];
+    unpairedNew: UnpairedGroupDiff[];
+    counts: { paired: number; pairedChanged: number; unpairedOld: number; unpairedNew: number };
+  };
+}

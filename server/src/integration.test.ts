@@ -329,6 +329,194 @@ async function main() {
     v2doc = (await call(base, 'GET', `/documents/${d2}`)).json;
     assert.strictEqual(v2doc.stats.brokenCount, 2, '切换底本后原两组均缺新底本片段');
 
+    // ---------- 版本对照：已发布校勘版 vs 当前工作版 ----------
+    // 新建独立文献，避免受上面修复/改字流程干扰
+    r = await call(base, 'POST', '/documents', { title: `版本对照测试 ${++seq}`, manuscripts: ['底甲', '乙', '丙'] });
+    assert.strictEqual(r.status, 201);
+    const d3 = r.json.id;
+    let d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    let d3ver = d3v.document.version;
+    const dmA = d3v.manuscripts[0]; // 底甲（默认底本）
+    const dmB = d3v.manuscripts[1];
+    const dmC = d3v.manuscripts[2];
+    await call(base, 'POST', `/manuscripts/${dmA.id}/lines`, { expectedVersion: d3ver++, content: '天命之謂性' });
+    await call(base, 'POST', `/manuscripts/${dmB.id}/lines`, { expectedVersion: d3ver++, content: '天命之謂姓' });
+    await call(base, 'POST', `/manuscripts/${dmC.id}/lines`, { expectedVersion: d3ver++, content: '天命之謂性' });
+    d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    const da1 = d3v.rawByMs.find((x: any) => x.msId === dmA.id).lines[0].lineId;
+    const db1 = d3v.rawByMs.find((x: any) => x.msId === dmB.id).lines[0].lineId;
+    const dc1 = d3v.rawByMs.find((x: any) => x.msId === dmC.id).lines[0].lineId;
+
+    const groupsV1 = [
+      { ord: 1, fragments: [
+        { msId: dmA.id, lineId: da1, startCp: 0, endCp: 5 },
+        { msId: dmB.id, lineId: db1, startCp: 0, endCp: 5 },
+        { msId: dmC.id, lineId: dc1, startCp: 0, endCp: 5 },
+      ]},
+    ];
+    r = await call(base, 'PUT', `/documents/${d3}/groups`, { expectedVersion: d3v.document.version, groups: groupsV1 });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    const prePublishVersion = (await call(base, 'GET', `/documents/${d3}`)).json.document.version;
+    r = await call(base, 'POST', `/documents/${d3}/publish`, { expectedVersion: prePublishVersion });
+    assert.strictEqual(r.status, 201, JSON.stringify(r.json));
+    assert.strictEqual(r.json.editionNo, 1);
+    // 发布即定稿：快照版本号 = bump 后的工作版版本号（两侧均显示“版本号”）
+    const v1version = (await call(base, 'GET', `/documents/${d3}`)).json.document.version;
+    assert.strictEqual(v1version, prePublishVersion + 1);
+    assert.strictEqual((await call(base, 'GET', `/documents/${d3}/editions/1`)).json.view.document.version, v1version);
+
+    // 发布后：新增第 2 行（甲「率性之謂道」、乙同文、丙缺文），改乙第 1 行 姓→性，整批重存（组 ID 全部更换）
+    await call(base, 'POST', `/manuscripts/${dmA.id}/lines`, { expectedVersion: v1version, content: '率性之謂道' });
+    await call(base, 'POST', `/manuscripts/${dmB.id}/lines`, { expectedVersion: v1version + 1, content: '率性之謂道' });
+    // 新增抄本丁（不录文）
+    await call(base, 'POST', `/documents/${d3}/manuscripts`, { expectedVersion: v1version + 2, name: '丁' });
+    r = await call(base, 'PUT', `/lines/${db1}`, {
+      expectedVersion: v1version + 3, startCp: 4, endCp: 5, replacement: '性',
+    });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    const da2 = d3v.rawByMs.find((x: any) => x.msId === dmA.id).lines[1].lineId;
+    const db2 = d3v.rawByMs.find((x: any) => x.msId === dmB.id).lines[1].lineId;
+    const groupsV2 = [
+      { ord: 1, fragments: [
+        { msId: dmA.id, lineId: da1, startCp: 0, endCp: 5 },
+        { msId: dmB.id, lineId: db1, startCp: 0, endCp: 5 },
+        { msId: dmC.id, lineId: dc1, startCp: 0, endCp: 5 },
+      ]},
+      { ord: 2, fragments: [
+        { msId: dmA.id, lineId: da2, startCp: 0, endCp: 5 },
+        { msId: dmB.id, lineId: db2, startCp: 0, endCp: 5 },
+        { msId: dmC.id, missing: true },
+      ]},
+    ];
+    r = await call(base, 'PUT', `/documents/${d3}/groups`, { expectedVersion: d3v.document.version, groups: groupsV2 });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    const v2version = (await call(base, 'GET', `/documents/${d3}`)).json.document.version;
+
+    let diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+    // 两侧底本与版本号
+    assert.strictEqual(diff.sides.old.kind, 'edition');
+    assert.strictEqual(diff.sides.old.editionNo, 1);
+    assert.strictEqual(diff.sides.old.version, v1version, '旧侧版本号应为快照定稿时的版本号');
+    assert.strictEqual(diff.sides.old.baseMsName, '底甲');
+    assert.strictEqual(diff.sides.new.kind, 'working');
+    assert.strictEqual(diff.sides.new.version, v2version);
+    assert.strictEqual(diff.baseSame, true);
+    // 行文：甲新增行2、乙行1改字 + 新增行2
+    const a1Diff = diff.textChanges.find((t: any) => t.msId === dmA.id && t.lineNo === 1);
+    assert.ok(!a1Diff, '甲行1未改动，不应出现');
+    const a2Diff = diff.textChanges.find((t: any) => t.msId === dmA.id && t.lineNo === 2);
+    assert.strictEqual(a2Diff.status, 'added');
+    const b1Diff = diff.textChanges.find((t: any) => t.msId === dmB.id && t.lineNo === 1);
+    assert.strictEqual(b1Diff.status, 'changed');
+    assert.ok(b1Diff.segments.some((s: any) => s.op === 'removed' && s.text === '姓'), '应有删除「姓」');
+    assert.ok(b1Diff.segments.some((s: any) => s.op === 'added' && s.text === '性'), '应有新增「性」');
+    // 新增抄本丁
+    assert.ok(diff.manuscripts.find((m: any) => m.name === '丁' && !m.inOld && m.inNew), '丁应为新增抄本');
+    // 组配对：不得凭 ID——两组底本位置 [行1,0,5) 相同且唯一 → 配对；[行2,0,5) 仅新侧 → 新未配对
+    assert.strictEqual(diff.groupDiff.counts.paired, 1);
+    assert.strictEqual(diff.groupDiff.counts.unpairedOld, 0);
+    assert.strictEqual(diff.groupDiff.counts.unpairedNew, 1);
+    assert.strictEqual(diff.groupDiff.unpairedNew[0].reason, 'not-matched');
+    assert.ok(diff.groupDiff.unpairedNew[0].cells.some((c: any) => c.msId === dmC.id && c.state === 'missing'),
+      '未配对新组应显式呈现丙的缺文标记');
+    const paired1 = diff.groupDiff.paired[0];
+    assert.strictEqual(paired1.status, 'changed');
+    assert.strictEqual(paired1.ordChanged, false);
+    // 整批重存更换了组 ID，但仍能配对（不凭 ID）
+    assert.notStrictEqual(paired1.oldGroupId, paired1.newGroupId);
+    const bChange = paired1.cellChanges.find((c: any) => c.msId === dmB.id);
+    assert.ok(bChange, '乙本片段应有变化条目');
+    assert.strictEqual(bChange.textChanged, true, '姓→性为确定文字改动（两侧均完好）');
+    assert.strictEqual(bChange.oldText, '天命之謂姓');
+    assert.strictEqual(bChange.newText, '天命之謂性');
+    assert.ok(
+      !paired1.cellChanges.some((c: any) => c.msId === dmA.id),
+      '甲本无变化，不应出现在变化条目里'
+    );
+
+    // 对照是只读：再次取工作版版本号不变
+    assert.strictEqual((await call(base, 'GET', `/documents/${d3}`)).json.document.version, v2version,
+      '对照不得修改工作版');
+
+    // 旧版不存在 → 404，错误信息明确
+    r = await call(base, 'GET', `/documents/${d3}/editions/99/diff`);
+    await expectFail(r, 404, '不存在');
+
+    // 刷新即反映最新工作版：再做一次改动后重新对照，行文变化应包含新改动
+    r = await call(base, 'PUT', `/lines/${da2}`, {
+      expectedVersion: v2version, startCp: 0, endCp: 1, replacement: '脩',
+    });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+    // 甲第 2 行在旧版整行不存在 → 始终为“新增行”，改字后新增文本应是最新的「脩性之謂道」
+    const a2AfterEdit = diff.textChanges.find((t: any) => t.msId === dmA.id && t.lineNo === 2);
+    assert.strictEqual(a2AfterEdit.status, 'added');
+    assert.ok(a2AfterEdit.newText.includes('脩') && !a2AfterEdit.newText.includes('修'),
+      '刷新后新增行内容应反映最新工作版改字');
+    // 乙第 2 行同为新增行，内容未受影响
+    const b2AfterEdit = diff.textChanges.find((t: any) => t.msId === dmB.id && t.lineNo === 2);
+    assert.strictEqual(b2AfterEdit.newText, '率性之謂道');
+    // 改字与组2底本片段 [0,5) 相交 → 组2待修复；片段仍在行内：字面文字确定，但须显式标待修复
+    let npAfterEdit = diff.groupDiff.unpairedNew.find((g: any) => g.ord === 2);
+    assert.ok(npAfterEdit.broken, '相交改动后组2应为待修复并显式标识');
+    const baseCellInRange = npAfterEdit.cells.find((c: any) => c.isBase);
+    assert.strictEqual(baseCellInRange.broken, true);
+    assert.strictEqual(baseCellInRange.outOfBounds, false, '行内片段不算越界');
+    assert.strictEqual(baseCellInRange.text, '脩性之謂道', '行内待修复片段的字面文字仍为确定文字');
+
+    // 真正缩短甲第 2 行至 3 字 → 组2底本片段 [0,5) 越界：现存部分不作确定文字
+    d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    r = await call(base, 'PUT', `/lines/${da2}`, {
+      expectedVersion: d3v.document.version, startCp: 3, endCp: 5, replacement: '',
+    });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+    npAfterEdit = diff.groupDiff.unpairedNew.find((g: any) => g.ord === 2);
+    const baseCellOob = npAfterEdit.cells.find((c: any) => c.isBase);
+    assert.ok(baseCellOob.broken && baseCellOob.outOfBounds, '缩短越界须显式标识');
+    assert.strictEqual(baseCellOob.text, null, '越界片段不得作为确定文字');
+    assert.strictEqual(baseCellOob.visibleText, '脩性之', '越界前可见部分仅供参考');
+    assert.strictEqual(baseCellOob.oobEnd, 3);
+
+    // 恢复甲第 2 行原文，供后续修复
+    d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    r = await call(base, 'PUT', `/lines/${da2}`, {
+      expectedVersion: d3v.document.version, startCp: 3, endCp: 3, replacement: '之謂道',
+    });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+
+    // ---------- 底本不同：组不配对，旧组与新组分别列出 ----------
+    d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    // 先修复组2，使切底本场景干净
+    const g2id = d3v.groups.find((g: any) => g.ord === 2).id;
+    r = await call(base, 'PUT', `/documents/${d3}/groups/${g2id}/repair`, {
+      expectedVersion: d3v.document.version,
+      group: { ord: 2, fragments: [
+        { msId: dmA.id, lineId: da2, startCp: 0, endCp: 5 },
+        { msId: dmB.id, lineId: db2, startCp: 0, endCp: 5 },
+        { msId: dmC.id, missing: true },
+      ]},
+    });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    d3v = (await call(base, 'GET', `/documents/${d3}`)).json;
+    // 切换底本到丙：两组均无丙的真实片段 → 全部待修复
+    r = await call(base, 'PUT', `/documents/${d3}/base`, { expectedVersion: d3v.document.version, msId: dmC.id });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.json));
+    diff = (await call(base, 'GET', `/documents/${d3}/editions/1/diff`)).json;
+    assert.strictEqual(diff.baseSame, false, '两侧底本不同');
+    assert.strictEqual(diff.groupDiff.counts.paired, 0, '底本不同不得配对');
+    assert.strictEqual(diff.groupDiff.unpairedOld.length, 1, '旧版 1 组整组列出');
+    assert.strictEqual(diff.groupDiff.unpairedNew.length, 2, '工作版 2 组整组列出');
+    assert.ok(diff.groupDiff.unpairedNew.every((g: any) => g.reason === 'base-differs'),
+      '底本不同原因须显式标注');
+    const nbG1 = diff.groupDiff.unpairedNew.find((g: any) => g.ord === 1);
+    const nbG2 = diff.groupDiff.unpairedNew.find((g: any) => g.ord === 2);
+    assert.strictEqual(nbG1.broken, false, '组1含新底本丙的真实片段，不需待修复');
+    assert.strictEqual(nbG2.broken, true, '组2新底本丙仅标缺文，须带待修复标识');
+    assert.ok(diff.groupDiff.unpairedOld[0].cells.some((c: any) => c.isBase && c.text === '天命之謂性'),
+      '旧组底本文字仍应确定呈现');
+
     console.log('✅ 全部集成测试通过');
   } finally {
     await close();
